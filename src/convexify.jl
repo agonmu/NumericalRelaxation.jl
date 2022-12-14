@@ -9,6 +9,13 @@ This results in a complexity of $\mathcal{O}(N)$.
 - `start::T = 0.9`
 - `stop::T = 20.0`
 """
+
+Base.@kwdef struct GrahamScan{T<:Number} <: AbstractConvexification
+    δ::T = 0.01
+    start::T = 0.9
+    stop::T = 20.0
+end
+
 Base.@kwdef struct QHull{T<:Number} <: AbstractConvexification
     δ::T = 0.01
     start::T = 0.9
@@ -19,7 +26,8 @@ Base.@kwdef struct QHull{T<:Number} <: AbstractConvexification
     len::Int64 = length(Fs)
 end
 
-δ(s::Qhull) = s.δ
+δ(s::GrahamScan) = s.δ
+δQH(s::Qhull) = s.δ
 
 function build_buffer(convexification::GrahamScan{T}) where T
     basegrid_F = [Tensors.Tensor{2,1}((x,)) for x in range(convexification.start,convexification.stop,step=convexification.δ)]
