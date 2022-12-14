@@ -12,6 +12,14 @@ struct ConvexificationBuffer1D{T1,T2} <: AbstractConvexificationBuffer
     values::Vector{T2}
 end
 
+struct ConvexificationBuffer1DQH{T1,T2} <: AbstractConvexificationBuffer
+    grid::Vector{T1}
+    values::Vector{T2}
+    lp1::Tensor{2,1}((T1))
+    rp1::Tensor{2,1}((T1))
+    len::Int64 
+end
+
 """
     AdaptiveConvexificationBuffer1D{T1,T2,T3} <: ConvexificationBuffer
 
