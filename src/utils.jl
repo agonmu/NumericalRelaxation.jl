@@ -15,9 +15,9 @@ end
 struct ConvexificationBuffer1DQH{T1,T2} <: AbstractConvexificationBuffer
     grid::Vector{T1}
     values::Vector{T2}
-    lp1::Tensor{2,1}((T1))
-    rp1::Tensor{2,1}((T1))
-    len::Int64 
+    lp1::T1
+    rp1::T1
+    len::Int64
 end
 
 """

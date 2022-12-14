@@ -18,6 +18,10 @@ W_multi_rc(F::Tensor{2,dim}) where dim = norm(F) ≤ 1 ? 0.0 : (norm(F)-1)^2
     @test @inferred(convexify(convexification,buffer,W,Tensor{2,1}((2.0,)))) == (W_conv,F⁺,F⁻)
 end
 
+@testset "QHull" begin
+    
+end
+
 ##### multi-dimensional relaxation unit tests ####
 @testset "Gradient Grid Iterator" begin
     # equidistant meshes

@@ -23,7 +23,7 @@ Base.@kwdef struct QHull{T<:Number} <: AbstractConvexification
 end
 
 δ(s::GrahamScan) = s.δ
-δQH(s::Qhull) = s.δ
+δ(s::QHull) = s.δ
 
 function build_buffer(convexification::GrahamScan{T}) where T
     basegrid_F = [Tensors.Tensor{2,1}((x,)) for x in range(convexification.start,convexification.stop,step=convexification.δ)]
@@ -32,14 +32,14 @@ function build_buffer(convexification::GrahamScan{T}) where T
     return ConvexificationBuffer1D(basegrid_F,basegrid_W)
 end
 
-function build_buffer(convexification::Qhull{T}) where T
+function build_buffer(convexification::QHull{T}) where T
     basegrid_F = [Tensors.Tensor{2,1}((x,)) for x in range(convexification.start,convexification.stop,step=convexification.δ)]
     #basegrid_F = collect(range(convexification.start,convexification.stop,step=convexification.δ))
     basegrid_W = zeros(T,length(basegrid_F)) 
     lp1 = basegrid_F[1]
     rp1 = basegrid_F[end]
     len = length(basegrid_F)
-    return ConvexificationBuffer1D(basegrid_F,basegrid_W, lp1, rp1, len)
+    return ConvexificationBuffer1DQH(basegrid_F,basegrid_W, lp1, rp1, len)
 end
 
 @doc raw"""
