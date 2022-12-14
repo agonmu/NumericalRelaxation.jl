@@ -13,6 +13,10 @@ Base.@kwdef struct QHull{T<:Number} <: AbstractConvexification
     δ::T = 0.01
     start::T = 0.9
     stop::T = 20.0
+    Fs::Vector{Tensor{2, 1, Float64, 1}} = [Tensor{2, 1, Float64, 1}((x,)) for x in start:δ:stop]
+    lp::Tensor{2, 1, Float64, 1} = Fs[1]
+    rp::Tensor{2, 1, Float64, 1} = Fs[end]
+    len::Int64 = length(Fs)
 end
 
 δ(s::Qhull) = s.δ
