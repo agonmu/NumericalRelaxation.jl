@@ -20,6 +20,8 @@ Base.@kwdef struct QHull{T<:Number} <: AbstractConvexification
     δ::T = 0.01
     start::T = 0.9
     stop::T = 20.0
+    riter::Int = 5
+    liter::Int = riter
 end
 
 δ(s::GrahamScan) = s.δ
