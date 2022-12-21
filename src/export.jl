@@ -6,7 +6,6 @@ export
     R1Convexification,
 #convexification buffers
     ConvexificationBuffer1D,
-    ConvexificationBuffer1DQH,
     AdaptiveConvexificationBuffer1D,
     R1ConvexificationBuffer,
     build_buffer,

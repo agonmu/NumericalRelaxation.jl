@@ -12,7 +12,13 @@ W(F::Tensor{2,1},x1=2,x2=6) = W(F[1],x1,x2)
 end
 
 @testset "QHull" begin
-
+    convexification = QHull(start=0.01,stop=5.0,δ=0.01)
+    buffer = build_buffer(convexification) 
+    W_conv, F⁺, F⁻ = convexify(convexification,buffer,W,Tensor{2,1}((2.0,)))
+    @test isapprox(W_conv,7.2,atol=1e-1)
+    @test isapprox(F⁺[1],4.0,atol=1e-1)
+    @test isapprox(F⁻[1],1.0,atol=1e-1)
+    @test @inferred(convexify(convexification,buffer,W,Tensor{2,1}((2.0,)))) == (W_conv,F⁺,F⁻)
 end
 
 @testset "Adaptive Convexification" begin

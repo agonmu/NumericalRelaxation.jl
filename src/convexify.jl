@@ -9,6 +9,7 @@ This results in a complexity of $\mathcal{O}(N)$.
 - `start::T = 0.9`
 - `stop::T = 20.0`
 """
+Base.isless(a::Tensors.Tensor{2,1,T,1}, b::Tensors.Tensor{2,1,T,1}) where T = a[1] < b[1]
 
 Base.@kwdef struct GrahamScan{T<:Number} <: AbstractConvexification
     δ::T = 0.01
@@ -20,8 +21,8 @@ Base.@kwdef struct QHull{T<:Number} <: AbstractConvexification
     δ::T = 0.01
     start::T = 0.9
     stop::T = 20.0
-    riter::Int = 5
-    liter::Int = riter
+    #riter::Int = 5
+    #liter::Int = riter
 end
 
 δ(s::GrahamScan) = s.δ
@@ -38,10 +39,7 @@ function build_buffer(convexification::QHull{T}) where T
     basegrid_F = [Tensors.Tensor{2,1}((x,)) for x in range(convexification.start,convexification.stop,step=convexification.δ)]
     #basegrid_F = collect(range(convexification.start,convexification.stop,step=convexification.δ))
     basegrid_W = zeros(T,length(basegrid_F)) 
-    lp1 = basegrid_F[1]
-    rp1 = basegrid_F[end]
-    len = length(basegrid_F)
-    return ConvexificationBuffer1DQH(basegrid_F,basegrid_W, lp1, rp1, len)
+    return ConvexificationBuffer1D(basegrid_F,basegrid_W)
 end
 
 @doc raw"""
@@ -64,6 +62,31 @@ function convexify(graham::GrahamScan{T2}, buffer::ConvexificationBuffer1D{T1,T2
     # reorder below to be agnostic w.r.t. tension and compression
     support_points = [buffer.grid[id⁺],buffer.grid[id⁻]] #F⁺ F⁻ assumption
     values_support_points = [buffer.values[id⁺],buffer.values[id⁻]] # W⁺ W⁻ assumption
+    _perm = sortperm(values_support_points)
+    W_conv = values_support_points[_perm[1]] + ((values_support_points[_perm[2]] - values_support_points[_perm[1]])/(support_points[_perm[2]] - support_points[_perm[1]]))*(F - support_points[_perm[1]])
+    return W_conv, support_points[_perm[2]], support_points[_perm[1]]
+end
+
+function convexify(quickhull::QHull{T2}, buffer::ConvexificationBuffer1D{T1,T2}, W::FUN, F::T1, xargs::Vararg{Any,XN}) where {T1,T2,FUN,XN}
+    #init buffer for new convexification run
+    for (i,x) in enumerate(quickhull.start:quickhull.δ:quickhull.stop)
+        tmp = T1(x)
+        buffer.grid[i] = tmp
+        buffer.values[i] = W(tmp, xargs...)
+    end
+    #convexifiy
+    bounds = FindBounds(quickhull, buffer)
+    #return W at f
+    if F[1] > 1.0
+        F⁻ = bounds[1]
+        F⁺ = bounds[2] 
+    else #pressure
+        F⁺ = bounds[3]
+        F⁻ = bounds[4]
+    end
+    #reorder below to be agnostic w.r.t. tension and compression
+    support_points = [F⁺, F⁻] #F⁺ F⁻ assumption
+    values_support_points = [W(F⁺, xargs...), W(F⁻, xargs...)] #W⁺ W⁻ assumption
     _perm = sortperm(values_support_points)
     W_conv = values_support_points[_perm[1]] + ((values_support_points[_perm[2]] - values_support_points[_perm[1]])/(support_points[_perm[2]] - support_points[_perm[1]]))*(F - support_points[_perm[1]])
     return W_conv, support_points[_perm[2]], support_points[_perm[1]]
@@ -172,6 +195,118 @@ function convexify_nondeleting!(F, W)
     end
     return n
 end
+
+function FindSide(Ws, start, stop, pind, lp, rp, p)
+    Wlp = Ws[start]
+    Wrp = Ws[stop]
+    Wp = Ws[pind]
+    val = (Wrp - Wlp)/(rp[1] - lp[1]) * (p[1] - lp[1]) - (Wp - Wlp)
+
+    if val < 0.0 
+        return -1
+    elseif val > 0.0 
+        return 1
+    else
+        return 0
+    end
+end
+
+function LineDist(Ws, start, stop, pind, lp, rp, p) 
+    Wlp = Ws[start]
+    Wrp = Ws[stop]
+    Wp = Ws[pind]
+    d = (Wrp - Wlp)/(rp[1] - lp[1]) * (p[1] - lp[1]) - (Wp - Wlp)
+    return abs(d)
+end
+
+function FindInd(start, stop, Fs, Ws, side)
+    lp = Fs[start]
+    rp = Fs[stop]
+    max_dist = 0.0 
+    ind = -1
+    for i in start:stop
+        temp = LineDist(Ws, start, stop, i, lp, rp, Fs[i])
+        if FindSide(Ws, start, stop, i, lp, rp, Fs[i]) == side && temp > max_dist
+            ind = i
+            max_dist = temp
+        end
+    end
+    return ind
+end
+
+function QuickHull(Fs, Ws, start, stop, hull_x)
+    lp = Fs[start]
+    rp = Fs[stop]
+
+    n = abs(start - stop)
+
+    if n == 1 
+        if lp ∉ hull_x 
+            push!(hull_x, lp)
+        end 
+        if rp ∉ hull_x
+            push!(hull_x, rp)
+        end 
+        return hull_x
+    end 
+
+    ind = FindInd(start, stop, Fs, Ws, 1)
+    if ind == -1 
+        if lp ∉ hull_x 
+            push!(hull_x, lp)
+        end 
+        if rp ∉ hull_x
+            push!(hull_x, rp)
+        end 
+        return hull_x 
+    else 
+        push!(hull_x, Fs[ind])
+    end 
+    
+    QuickHull(Fs, Ws, start, ind, hull_x)
+    QuickHull(Fs, Ws, ind, stop, hull_x)
+    return hull_x
+end
+
+function FindBounds(quickhull::QHull{T2}, buffer::ConvexificationBuffer1D{T1,T2}) where {T1,T2}
+    delta = quickhull.δ
+
+    Fs = buffer.grid
+    Ws = buffer.values
+
+    start = 1
+    stop = length(Fs)
+    test_array = Tensor{2, 1, Float64, 1}[]
+
+    hull_x = QuickHull(Fs, Ws, start, stop, test_array)
+    hull_x = sort(hull_x)
+    len = length(hull_x)
+    
+    ### tension 
+    tF⁻ = Tensor{2, 1, Float64, 1}((0.0,)) 
+    tF⁺ = Tensor{2, 1, Float64, 1}((0.0,)) 
+    for i in 1:len - 1
+        deltak = round(hull_x[i+1][1] - hull_x[i][1], digits = 5)
+        if hull_x[i][1] > 1.0 && deltak ≠ delta
+            tF⁻ = hull_x[i] 
+            tF⁺ = hull_x[i+1]
+            break
+        end 
+    end 
+
+    ### pressure 
+    pF⁻ = Tensor{2, 1, Float64, 1}((0.0,))  
+    pF⁺ = Tensor{2, 1, Float64, 1}((0.0,)) 
+    for i in 1:len - 1
+        deltak = round(hull_x[i+1][1] - hull_x[i][1], digits = 5)
+        if hull_x[i][1] < 1.0 && deltak ≠ delta
+            pF⁺ = hull_x[i]
+            pF⁻ = hull_x[i+1] 
+            break
+        end 
+    end 
+    return tF⁻, tF⁺, pF⁺, pF⁻
+end 
 
 ####################################################
 ####################################################
