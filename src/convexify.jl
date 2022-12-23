@@ -21,8 +21,9 @@ Base.@kwdef struct QHull{T<:Number} <: AbstractConvexification
     δ::T = 0.01
     start::T = 0.9
     stop::T = 20.0
-    #riter::Int = 5
-    #liter::Int = riter
+    riter::Int = 5
+    liter::Int = riter
+    counter::Vector{Int64} = [0]
 end
 
 δ(s::GrahamScan) = s.δ
@@ -234,13 +235,16 @@ function FindInd(start, stop, Fs, Ws, side)
     return ind
 end
 
-function QuickHull(Fs, Ws, start, stop, hull_x)
+function QuickHull(Fs, Ws, start, stop, hull_x, counter)
+    if length(hull_x) == counter + 2
+        return hull_x
+    end
     lp = Fs[start]
     rp = Fs[stop]
 
     n = abs(start - stop)
 
-    if n == 1 
+    if n == 1
         if lp ∉ hull_x 
             push!(hull_x, lp)
         end 
@@ -248,7 +252,7 @@ function QuickHull(Fs, Ws, start, stop, hull_x)
             push!(hull_x, rp)
         end 
         return hull_x
-    end 
+    end
 
     ind = FindInd(start, stop, Fs, Ws, 1)
     if ind == -1 
@@ -262,23 +266,29 @@ function QuickHull(Fs, Ws, start, stop, hull_x)
     else 
         push!(hull_x, Fs[ind])
     end 
-    
-    QuickHull(Fs, Ws, start, ind, hull_x)
-    QuickHull(Fs, Ws, ind, stop, hull_x)
+
+    QuickHull(Fs, Ws, start, ind, hull_x, counter)
+    QuickHull(Fs, Ws, ind, stop, hull_x, counter)
     return hull_x
 end
 
 function FindBounds(quickhull::QHull{T2}, buffer::ConvexificationBuffer1D{T1,T2}) where {T1,T2}
     delta = quickhull.δ
-
+    liter = quickhull.liter
+    riter = quickhull.riter 
     Fs = buffer.grid
     Ws = buffer.values
 
     start = 1
     stop = length(Fs)
-    test_array = Tensor{2, 1, Float64, 1}[]
+    
+    ind = findfirst(x -> x == Tensor{2, 1, Float64, 1}((1.0,)), Fs)
+    array_l = Tensor{2, 1, Float64, 1}[Fs[start], Fs[ind]]
+    array_r = Tensor{2, 1, Float64, 1}[Fs[ind], Fs[stop]]
+    hull_xl = QuickHull(Fs, Ws, start, ind, array_l, liter)
+    hull_xr = QuickHull(Fs, Ws, ind, stop, array_r, riter)
+    hull_x = vcat(hull_xl, hull_xr)
 
-    hull_x = QuickHull(Fs, Ws, start, stop, test_array)
     hull_x = sort(hull_x)
     len = length(hull_x)
     
