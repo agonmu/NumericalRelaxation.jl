@@ -287,7 +287,7 @@ function FindBounds(quickhull::QHull{T2}, buffer::ConvexificationBuffer1D{T1,T2}
     array_r = Tensor{2, 1, Float64, 1}[Fs[ind], Fs[stop]]
     hull_xl = QuickHull(Fs, Ws, start, ind, array_l, liter)
     hull_xr = QuickHull(Fs, Ws, ind, stop, array_r, riter)
-    hull_x = vcat(hull_xl, hull_xr)
+    hull_x = vcat(hull_xl, hull_xr[2:end])
 
     hull_x = sort(hull_x)
     len = length(hull_x)
