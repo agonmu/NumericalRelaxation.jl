@@ -21,7 +21,7 @@ Base.@kwdef struct QHull{T<:Number} <: AbstractConvexification
     δ::T = 0.01
     start::T = 0.9
     stop::T = 20.0
-    riter::Int = 5
+    riter::Int = 8
     liter::Int = riter
     counter::Vector{Int64} = [0]
 end
