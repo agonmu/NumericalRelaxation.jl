@@ -274,8 +274,8 @@ end
 
 function FindBounds(quickhull::QHull{T2}, buffer::ConvexificationBuffer1D{T1,T2}) where {T1,T2}
     delta = quickhull.δ
-    liter = quickhull.liter
     riter = quickhull.riter 
+    liter = quickhull.liter
     Fs = buffer.grid
     Ws = buffer.values
 
