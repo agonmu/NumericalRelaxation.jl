@@ -133,9 +133,35 @@ Base.@kwdef struct AdaptiveGrahamScan <: AbstractConvexification
     forceAdaptivity::Bool = false
 end
 
+Base.@kwdef struct AdaptiveQHull <: AbstractConvexification
+    interval::Vector{Float64}
+    basegrid_numpoints::Int64 = 50
+    adaptivegrid_numpoints::Int64 = 115
+    exponent::Int64 = 5
+    distribution::String = "fix"
+    stepSizeIgnoreHessian::Float64 = 0.05     # minimale Schrittweite für die Hesse berücksichtigt wird 
+    minPointsPerInterval::Int64 = 15
+    radius::Float64 = 3                       # nur relevant für: distribution = "fix"
+    minStepSize::Float64 = 0.03
+    forceAdaptivity::Bool = false
+    dataQHull::QHull = QHull()
+end
+
 δ(s::AdaptiveGrahamScan) = step(range(s.interval[1],s.interval[2],length=s.adaptivegrid_numpoints))
+δ(s::AdaptiveQHull)= step(range(s.interval[1],s.interval[2],length=s.adaptivegrid_numpoints))
 
 function build_buffer(ac::AdaptiveGrahamScan)
+    basegrid_F = [Tensors.Tensor{2,1}((x,)) for x in range(ac.interval[1],ac.interval[2],length=ac.basegrid_numpoints)]
+    basegrid_W = zeros(Float64,ac.basegrid_numpoints)
+    basegrid_∂²W = [Tensors.Tensor{4,1}((x,)) for x in zeros(Float64,ac.basegrid_numpoints)]
+    adaptivegrid_F = [Tensors.Tensor{2,1}((x,)) for x in zeros(Float64,ac.adaptivegrid_numpoints)]
+    adaptivegrid_W = zeros(Float64,ac.adaptivegrid_numpoints)
+    basebuffer = ConvexificationBuffer1D(basegrid_F,basegrid_W)
+    adaptivebuffer = ConvexificationBuffer1D(adaptivegrid_F,adaptivegrid_W)
+    return AdaptiveConvexificationBuffer1D(basebuffer,adaptivebuffer,basegrid_∂²W)
+end
+
+function build_buffer(ac::AdaptiveQHull)
     basegrid_F = [Tensors.Tensor{2,1}((x,)) for x in range(ac.interval[1],ac.interval[2],length=ac.basegrid_numpoints)]
     basegrid_W = zeros(Float64,ac.basegrid_numpoints)
     basegrid_∂²W = [Tensors.Tensor{4,1}((x,)) for x in zeros(Float64,ac.basegrid_numpoints)]
@@ -157,6 +183,29 @@ function convexify(adaptivegraham::AdaptiveGrahamScan, buffer::AdaptiveConvexifi
 
     #construct adpative grid
     adaptive_1Dgrid!(adaptivegraham, buffer)
+    #init function values on adaptive grid
+    for (i,x) in enumerate(buffer.adaptivebuffer.grid)
+        buffer.adaptivebuffer.values[i] = W(x, xargs...)
+    end
+    #convexify
+    convexgrid_n = convexify_nondeleting!(buffer.adaptivebuffer.grid,buffer.adaptivebuffer.values)
+    # return W at F
+    id⁺ = findfirst(x -> x >= F, @view(buffer.adaptivebuffer.grid[1:convexgrid_n]))
+    id⁻ = findlast(x -> x <= F,  @view(buffer.adaptivebuffer.grid[1:convexgrid_n]))
+    # reorder below to be agnostic w.r.t. tension and compression
+    support_points = [buffer.adaptivebuffer.grid[id⁺],buffer.adaptivebuffer.grid[id⁻]] #F⁺ F⁻ assumption
+    values_support_points = [buffer.adaptivebuffer.values[id⁺],buffer.adaptivebuffer.values[id⁻]] # W⁺ W⁻ assumption
+    _perm = sortperm(values_support_points)
+    W_conv = values_support_points[_perm[1]] + ((values_support_points[_perm[2]] - values_support_points[_perm[1]])/(support_points[_perm[2]][1] - support_points[_perm[1]][1]))*(F[1] - support_points[_perm[1]][1])
+    return W_conv, support_points[_perm[2]], support_points[_perm[1]]
+end
+
+function convexify(adaptivequickhull::AdaptiveQHull, buffer::AdaptiveConvexificationBuffer1D{T1,T2}, W::FUN, F::T1, xargs::Vararg{Any,XN}) where {T1,T2,FUN,XN}
+    #init function values **and grid** on coarse grid
+    buffer.basebuffer.values .= [W(F, xargs...) for x in buffer.basebuffer.grid]
+
+    #construct adpative grid
+    adaptive_1Dgrid!(adaptivequickhull, buffer)
     #init function values on adaptive grid
     for (i,x) in enumerate(buffer.adaptivebuffer.grid)
         buffer.adaptivebuffer.values[i] = W(x, xargs...)
@@ -278,11 +327,9 @@ function FindBounds(quickhull::QHull{T2}, buffer::ConvexificationBuffer1D{T1,T2}
     liter = quickhull.liter
     Fs = buffer.grid
     Ws = buffer.values
-
     start = 1
     stop = length(Fs)
-    
-    ind = findfirst(x -> x == Tensor{2, 1, Float64, 1}((1.0,)), Fs)
+    ind = findfirst(x -> x >= Tensor{2, 1, Float64, 1}((1.0,)), Fs)
     array_l = Tensor{2, 1, Float64, 1}[Fs[start], Fs[ind]]
     array_r = Tensor{2, 1, Float64, 1}[Fs[ind], Fs[stop]]
     hull_xl = QuickHull(Fs, Ws, start, ind, array_l, liter)
@@ -359,6 +406,26 @@ struct Polynomial{T1<:Union{Float64,Tensors.Tensor{2,1}}}
         end
         return new{T}(ac.distribution, F, ΔF, ac.exponent, numpoints, ac.minStepSize, rad, n, a, b, c, d, e)
     end
+    function Polynomial(F::T, ΔF::T, numpoints::Int, ac::Union{AdaptiveQHull, AdaptiveGrahamScan}) where {T}#exponent::Int, numpoints, distribution="fix", r=1.0, hₘᵢₙ=0.00001) where {T}
+        if ac.distribution == "var"
+            c = F
+            b = one(T)* ac.minStepSize
+            a = one(T)* (2/numpoints)^ac.exponent*(ΔF[1]/2-ac.minStepSize*numpoints/2)
+            d = one(T)* 0.0
+            e = one(T)* 0.0
+            n = 0.0
+            rad = copy(ac.radius)
+        elseif ac.distribution == "fix"
+            rad =  ac.radius<ΔF[1]/2 ? ac.radius/1 : ΔF[1]/2
+            c = F
+            b = one(T)* ac.minStepSize
+            d = one(T)* (1/(2*numpoints)*(sqrt((ΔF[1]-(ac.exponent-1)*(b[1]*numpoints-2*rad))^2+4*b[1]*numpoints*(ac.exponent-1)*(ΔF[1]-2*rad))-b[1]*numpoints*ac.exponent+b[1]*numpoints+ΔF[1]+2*ac.exponent*rad-2*rad))
+            n = (rad-ΔF[1]/2)/d[1]+numpoints/2
+            e = F+ΔF/2-d*numpoints/2
+            a = (d-b)/(ac.exponent*n^(ac.exponent-1))
+        end
+        return new{T}(ac.distribution, F, ΔF, ac.exponent, numpoints, ac.minStepSize, rad, n, a, b, c, d, e)
+    end
 end
 
 @doc raw"""
@@ -384,6 +451,13 @@ function adaptive_1Dgrid!(ac::AdaptiveGrahamScan, ac_buffer::AdaptiveConvexifica
     Fₕₑₛ = check_hessian(ac, ac_buffer)
     Fₛₗₚ = check_slope(ac_buffer)
     F⁺⁻ = combine(Fₛₗₚ, Fₕₑₛ)
+    discretize_interval(ac_buffer.adaptivebuffer.grid, F⁺⁻, ac)
+    return F⁺⁻
+end
+
+function adaptive_1Dgrid!(ac::AdaptiveQHull, ac_buffer::AdaptiveConvexificationBuffer1D{T1,T2,T3}) where {T1,T2,T3}
+    Fpm = FindBounds(ac.dataQHull, ac_buffer.basebuffer)
+    F⁺⁻ = [Fpm[3], Fpm[4], Fpm[1], Fpm[2]]
     discretize_interval(ac_buffer.adaptivebuffer.grid, F⁺⁻, ac)
     return F⁺⁻
 end
@@ -573,11 +647,130 @@ function discretize_interval(Fₒᵤₜ::Array{T}, F⁺⁻::Array{T}, ac::Adapti
     end
 end
 
+function discretize_interval(Fₒᵤₜ::Array{T}, F⁺⁻::Array{T}, ac::Union{AdaptiveQHull, AdaptiveGrahamScan}) where {T}
+    if (length(F⁺⁻) > 2) || (ac.forceAdaptivity) # is function convex ?
+        numIntervals = length(F⁺⁻)-1
+        gridpoints_oninterval = Array{Int64}(undef,numIntervals)
+        distribute_gridpoints!(gridpoints_oninterval, F⁺⁻, ac)
+        # ================================================================================
+        # ===================================  fill vector  ==============================
+        # ================================================================================
+        ∑gridpoints = sum(gridpoints_oninterval)
+        ∑j = 0
+        for i=1:numIntervals
+            P = Polynomial(F⁺⁻[i],F⁺⁻[i+1]-F⁺⁻[i], gridpoints_oninterval[i], ac)
+            j = 0
+            while j < gridpoints_oninterval[i]
+                Fₒᵤₜ[∑j+j+1] = project(P,j)
+                j += 1
+            end
+            ∑j += gridpoints_oninterval[i]; 
+        end
+        Fₒᵤₜ[end] = F⁺⁻[end]
+        return nothing
+    else # if function already convex
+        Fₒᵤₜ .= collect(range(F⁺⁻[1],F⁺⁻[2]; length=ac.adaptivegrid_numpoints))
+        return nothing
+    end
+end
+
 function inv_m(mask::Array{T}) where {T}
     return ones(T,size(mask)) - mask
 end
 
 function distribute_gridpoints!(vecₒᵤₜ::Array, F⁺⁻::Array, ac::AdaptiveGrahamScan)
+    numIntervals = length(F⁺⁻)-1
+    gridpoints_oninterval = copy(vecₒᵤₜ)
+    if ac.distribution == "var"
+        # ================================================================================
+        # ================= Stuetzstellen auf Intervalle aufteilen =======================
+        # ================================================================================
+        for i=1:numIntervals
+            gridpoints_oninterval[i] = Int(round((F⁺⁻[i+1]-F⁺⁻[i])/(F⁺⁻[end]-F⁺⁻[1]) * (ac.adaptivegrid_numpoints-1)))                    
+        end
+        # ================================================================================
+        # ======== korrektur --> um vorgegebene Anzahl an Gitterpunkten einzuhalten ======
+        # ================================================================================
+        # normierung
+        norm_gridpoints_oninterval = gridpoints_oninterval/sum(gridpoints_oninterval)
+        gridpoints_oninterval = Int.(round.(norm_gridpoints_oninterval*(ac.adaptivegrid_numpoints-1))) 
+        # Mindestanzahl eingehlaten?
+        for i in 1:length(gridpoints_oninterval)
+            gridpoints_oninterval[i] = max(ac.minPointsPerInterval,gridpoints_oninterval[i])
+        end
+        # differenz ausgleichen
+        ∑gridpoints = sum(gridpoints_oninterval)
+        if ∑gridpoints != (ac.adaptivegrid_numpoints-1)
+            dif = (ac.adaptivegrid_numpoints-1) - ∑gridpoints
+            iₘₐₓ = 1
+            for i in 2:numIntervals
+                gridpoints_oninterval[i]>gridpoints_oninterval[iₘₐₓ] ? iₘₐₓ = i : ()
+            end
+            gridpoints_oninterval[iₘₐₓ] += dif
+        end
+        # Einträge übertragen
+        vecₒᵤₜ .= gridpoints_oninterval
+        return nothing
+    elseif ac.distribution == "fix"
+        mask_active = ones(Bool, numIntervals)
+        mask_active_last = zeros(Bool, numIntervals)
+        cnt = 1
+        while (sum(mask_active_last-mask_active)!=0) && (cnt<=10)
+            # ================================================================================
+            # ================= Stuetzstellen auf Intervalle aufteilen =======================
+            # ================================================================================ 
+            mask_active_last = copy(mask_active)
+            activeIntervals = sum(mask_active)
+            activeIntervals==0 ? error("Could not distribute grid points among intervalls. Try to reduce number of grid points or decrease minimum step size.") : nothing 
+            numGridpointsOnRadius =
+                Int(round( (ac.adaptivegrid_numpoints-1-sum(gridpoints_oninterval.*inv_m(mask_active)))
+                /(activeIntervals) ))
+            radPol = Polynomial(0.0,2*ac.radius, numGridpointsOnRadius, ac)
+            hₘₐₓ =
+                (project(radPol, numGridpointsOnRadius/2+0.001)
+                -project(radPol, numGridpointsOnRadius/2-0.001)) / 0.002
+            for i in 1:numIntervals
+                if mask_active[i] == 1
+                    linPartOfF = max((F⁺⁻[i+1][1]-F⁺⁻[i][1])-2*ac.radius,0)
+                    gridpoints_oninterval[i] =
+                        Int(round( (ac.adaptivegrid_numpoints-1)/(activeIntervals) + linPartOfF/hₘₐₓ ))
+                end
+            end
+            # ================================================================================
+            # ======== korrektur --> um vorgegebene Anzahl an Gitterpunkten einzuhalten ======
+            # ================================================================================
+            # normierung
+            norm_gridpoints_oninterval = gridpoints_oninterval./(sum(mask_active.*gridpoints_oninterval))
+            norm_gridpoints_oninterval .*= mask_active
+            active_points = ac.adaptivegrid_numpoints - 1 - sum(inv_m(mask_active).*gridpoints_oninterval)
+            gridpoints_oninterval = Int.(round.(inv_m(mask_active).*gridpoints_oninterval +     norm_gridpoints_oninterval*active_points))
+            # reduktion falls minimale Schrittweite*Stützpunkte > Intervallbreite
+            for i in 1:length(gridpoints_oninterval)
+                maxnum = floor((F⁺⁻[i+1][1]-F⁺⁻[i][1])/ac.minStepSize)
+                if gridpoints_oninterval[i] > maxnum
+                    gridpoints_oninterval[i] = maxnum
+                    mask_active[i] = 0
+                end
+            end
+            cnt += 1
+        end
+        # differenz ausgleichen
+        ∑gridpoints = sum(gridpoints_oninterval)
+        if ∑gridpoints != (ac.adaptivegrid_numpoints-1)
+            dif = (ac.adaptivegrid_numpoints-1) - ∑gridpoints
+            iₘₐₓ = 1
+            for i in 2:numIntervals
+                gridpoints_oninterval[i]>gridpoints_oninterval[iₘₐₓ] ? iₘₐₓ = i : ()
+            end
+            gridpoints_oninterval[iₘₐₓ] += dif
+        end
+        # Einträge übertragen
+        vecₒᵤₜ .= gridpoints_oninterval
+        return nothing
+    end
+end
+
+function distribute_gridpoints!(vecₒᵤₜ::Array, F⁺⁻::Array, ac::Union{AdaptiveQHull, AdaptiveGrahamScan})
     numIntervals = length(F⁺⁻)-1
     gridpoints_oninterval = copy(vecₒᵤₜ)
     if ac.distribution == "var"

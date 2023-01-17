@@ -3,6 +3,7 @@ export
     GrahamScan,
     QHull,
     AdaptiveGrahamScan,
+    AdaptiveQHull,
     R1Convexification,
 #convexification buffers
     ConvexificationBuffer1D,

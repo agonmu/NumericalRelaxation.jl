@@ -21,8 +21,47 @@ end
     @test @inferred(convexify(convexification,buffer,W,Tensor{2,1}((2.0,)))) == (W_conv,F⁺,F⁻)
 end
 
-@testset "Adaptive Convexification" begin
+@testset "Adaptive GrahamScan Convexification" begin
     ac = AdaptiveGrahamScan(
+            interval=[0.001,5.0],
+            basegrid_numpoints=50,
+            adaptivegrid_numpoints=115,
+            exponent=5,
+            distribution="fix",
+            stepSizeIgnoreHessian=0.05,
+            minPointsPerInterval=15,
+            radius=3,
+            minStepSize=0.03,
+            forceAdaptivity=false)
+    @testset "build_buffer()" begin
+        buf = @inferred NumericalRelaxation.build_buffer(ac)
+        @test typeof(buf) == (NumericalRelaxation.AdaptiveConvexificationBuffer1D{Tensor{2,1,Float64,1},Float64,Tensor{4,1,Float64,1}})
+        @test length(buf.basebuffer.grid) == ac.basegrid_numpoints
+        @test length(buf.basebuffer.values) == ac.basegrid_numpoints
+        @test length(buf.basegrid_∂²W) == ac.basegrid_numpoints
+        @test length(buf.adaptivebuffer.grid) == ac.adaptivegrid_numpoints
+        @test length(buf.adaptivebuffer.values) == ac.adaptivegrid_numpoints
+        @test buf.basebuffer.grid[1][1] == ac.interval[1]
+        @test buf.basebuffer.grid[end][1] == ac.interval[2]
+        δ_sum = 0
+        for i in 1:ac.basegrid_numpoints-1 #check for equal distribution
+            δ_sum = abs((buf.basebuffer.grid[i+1][1]-buf.basebuffer.grid[i][1])-(ac.interval[2]-ac.interval[1])/(ac.basegrid_numpoints-1))
+        end
+        @test isapprox(δ_sum,0,atol=1e-10)
+    end
+    @testset "convexify!()" begin
+        buffer = build_buffer(ac)
+        F = Tensors.Tensor{2,1}((2.0,))
+        W_conv, F⁺, F⁻ = convexify(ac,buffer,W,Tensor{2,1}((2.0,)))
+        @test isapprox(W_conv,7.2,atol=1e-1)
+        @test isapprox(F⁺[1],4.0,atol=1e-1)
+        @test isapprox(F⁻[1],1.0,atol=1e-1)
+        @test @inferred(convexify(ac,buffer,W,Tensor{2,1}((2.0,)))) == (W_conv,F⁺,F⁻)
+    end
+end
+
+@testset "Adaptive QHull & GrahamScan Convexification" begin
+    ac = AdaptiveQHull(
             interval=[0.001,5.0],
             basegrid_numpoints=50,
             adaptivegrid_numpoints=115,
